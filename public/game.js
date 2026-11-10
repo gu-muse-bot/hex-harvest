@@ -8,7 +8,20 @@
   var SIZE = 8;
   var WIN_CELLS = 39; // 60% of 64, rounded up
   var MAX_MOVES = 160;
-  var CAPTURE_COST = 3;
+  var CAPTURE_COST = 5; // A capture is a 2-cell swing, so it must cost real
+  // tempo: no resource refund on capture (claiming still gains the cell's
+  // resource). At cost 3 with a refund, "capture everything" was a dominant
+  // strategy and mirror games stalled to the move cap (QC 2026-11-10).
+  var CONTESTED_CLAIM_COST = 2; // Claiming a cell next to an enemy cell
+  // costs 2 points ("contested ground"). Pushing into the middle is no longer
+  // free, so an attacker cannot bank points for captures while expanding
+  // toward the enemy — and a defender who stays home banks points for free.
+  // Balance-tested 2026-11-10 (see BALANCE.md): cost 5 alone still let
+  // "rush" sweep 12/12; with contested claims it is 9-3, capture-first no
+  // longer sweeps claim-high (36-28 / 34-30), and no game reaches the cap.
+  // Cost 8 was also tried: it did not stop "rush" (expand toward the enemy
+  // and capture whenever possible) from sweeping, because points come bundled
+  // with claims — saving for a capture costs no tempo. See BALANCE.md.
   var HARVEST_GAIN = 3;
   var COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12'];
   var NAMES = ['Ruby', 'Azure', 'Emerald', 'Amber'];
@@ -44,6 +57,12 @@
   function touchesOwn(board, player, r, c) {
     return adjacent(r, c).some(function (xy) { return board[xy[0]][xy[1]] === player; });
   }
+  function touchesEnemy(board, player, r, c) {
+    return adjacent(r, c).some(function (xy) {
+      var o = board[xy[0]][xy[1]];
+      return o !== -1 && o !== player;
+    });
+  }
 
   function createGame(playerCount, opts) {
     opts = opts || {};
@@ -71,7 +90,15 @@
     var moves = [{ type: 'harvest' }];
     for (var r = 0; r < SIZE; r++) for (var c = 0; c < SIZE; c++) {
       if (state.board[r][c] !== -1) continue;
-      if (touchesOwn(state.board, player, r, c)) moves.push({ type: 'claim', row: r, col: c });
+      if (!touchesOwn(state.board, player, r, c)) continue;
+      if (touchesEnemy(state.board, player, r, c)) {
+        // Contested ground: costs points, so it is only listed when affordable.
+        if (state.players[player].points >= CONTESTED_CLAIM_COST) {
+          moves.push({ type: 'claim', row: r, col: c, cost: CONTESTED_CLAIM_COST });
+        }
+      } else {
+        moves.push({ type: 'claim', row: r, col: c });
+      }
     }
     if (state.players[player].points >= CAPTURE_COST) {
       for (var r2 = 0; r2 < SIZE; r2++) for (var c2 = 0; c2 < SIZE; c2++) {
@@ -137,12 +164,23 @@
         var victim = state.players[owner]; victim.cells -= 1;
         note = 'captured ' + victim.name + ' cell at (' + r + ',' + c + ') for ' + CAPTURE_COST + ' points';
       } else {
-        note = 'claimed (' + r + ',' + c + ')';
+        // A claim next to an enemy cell is contested ground: it costs points.
+        if (touchesEnemy(state.board, player, r, c)) {
+          if (pl.points < CONTESTED_CLAIM_COST) return { ok: false, error: 'contested claim costs ' + CONTESTED_CLAIM_COST + ' points, you have ' + pl.points };
+          pl.points -= CONTESTED_CLAIM_COST;
+          note = 'claimed contested (' + r + ',' + c + ') for ' + CONTESTED_CLAIM_COST + ' points';
+        } else {
+          note = 'claimed (' + r + ',' + c + ')';
+        }
       }
       state.board[r][c] = player;
       pl.cells += 1;
-      pl.points += state.resources[r][c];
-      note += ', +' + state.resources[r][c] + ' points (resource ' + state.resources[r][c] + ')';
+      if (action.type === 'claim') {
+        // Claiming gains the cell's resource; capturing does not (the
+        // captured cell's resource is spent, not refunded to the attacker).
+        pl.points += state.resources[r][c];
+        note += ', +' + state.resources[r][c] + ' points (resource ' + state.resources[r][c] + ')';
+      }
     } else {
       return { ok: false, error: 'unknown action type: ' + action.type };
     }
@@ -171,6 +209,7 @@
   return {
     SIZE: SIZE, WIN_CELLS: WIN_CELLS, MAX_MOVES: MAX_MOVES,
     CAPTURE_COST: CAPTURE_COST, HARVEST_GAIN: HARVEST_GAIN,
+    CONTESTED_CLAIM_COST: CONTESTED_CLAIM_COST, touchesEnemy: touchesEnemy,
     createGame: createGame, legalMoves: legalMoves, applyMove: applyMove,
     boardToString: boardToString, countCells: countCells
   };

@@ -13,7 +13,13 @@ const PUBLIC = path.join(__dirname, 'public');
 const matches = new Map();
 let counter = 0;
 function newId() { counter += 1; return 'm' + Date.now().toString(36) + counter.toString(36); }
-function newCode() { return Math.random().toString(36).slice(2, 6).toUpperCase(); }
+function newCode() {
+  // Lobby codes must be unique: by-code lookup returns the first match.
+  let code;
+  do { code = Math.random().toString(36).slice(2, 6).toUpperCase(); }
+  while ([...matches.values()].some((m) => m.code === code));
+  return code;
+}
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png' };
 
@@ -58,6 +64,14 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/matches' && req.method === 'GET') {
       return sendJson(res, 200, { ok: true, matches: [...matches.values()].map((m) => ({ id: m.id, code: m.code, playerCount: m.playerCount, status: m.state.status, players: m.players })) });
     }
+    // D5: join by lobby code (the code shown on the page is now usable).
+    const byCodeRoute = p.match(/^\/api\/matches\/by-code\/([A-Za-z0-9]+)$/);
+    if (byCodeRoute && req.method === 'GET') {
+      const code = byCodeRoute[1].toUpperCase();
+      const m = [...matches.values()].find((x) => x.code === code);
+      if (!m) return sendJson(res, 404, { ok: false, error: 'no match with code ' + code });
+      return sendJson(res, 200, { ok: true, match: publicState(m) });
+    }
     const matchRoute = p.match(/^\/api\/matches\/([^/]+)(\/(join|move|log|legal))?$/);
     if (matchRoute) {
       const m = matches.get(matchRoute[1]);
@@ -99,6 +113,9 @@ const server = http.createServer(async (req, res) => {
     }
     return sendJson(res, 404, { ok: false, error: 'not found: ' + p });
   } catch (e) {
+    // D8: the only JSON.parse in this server is readBody, so a SyntaxError
+    // here means a malformed request body — that is a 400, not a 500.
+    if (e instanceof SyntaxError) return sendJson(res, 400, { ok: false, error: 'invalid JSON body' });
     return sendJson(res, 500, { ok: false, error: String(e && e.message || e) });
   }
 });
