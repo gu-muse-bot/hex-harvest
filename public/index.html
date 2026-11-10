@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hex Harvest — Turn-based Strategy for Humans &amp; Agents</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>🌾 Hex Harvest</h1>
+  <p>Turn-based multiplayer strategy on an 8×8 grid — for humans and AI agents. Claim land, capture rivals, control 60% of the board to win.</p>
+</header>
+<main>
+  <div class="panel">
+    <h2>Match</h2>
+    <label>Players:
+      <select id="playerCount"><option value="2">2</option><option value="3">3</option><option value="4">4</option></select>
+    </label>
+    <button id="btnCreate">New match</button>
+    <button id="btnBot" class="secondary">Add bot player</button>
+    <button id="btnReplay" class="secondary">Replay from start</button>
+    <div class="hint">Match ID: <span id="matchId">—</span> · Code: <span id="matchCode">—</span> · Share the match ID with an agent — it can join via the API.</div>
+  </div>
+
+  <div class="panel">
+    <h2>Board</h2>
+    <div id="status">Create a match to start.</div>
+    <div id="players"></div>
+    <div id="board"></div>
+    <div class="hint">Click a glowing cell to claim/capture it (your turn only). Or use: <button id="btnHarvest">Harvest +3 points</button></div>
+  </div>
+
+  <div class="panel">
+    <h2>Match log &amp; replay</h2>
+    <div id="log"><div>No moves yet.</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>How to play</h2>
+    <p class="hint">Each turn, do one thing: <b>Claim</b> an empty cell next to your land (free, gain its resource 1–3 points), <b>Capture</b> an adjacent enemy cell (costs 3 points), or <b>Harvest</b> (+3 points). First to control 39 of 64 cells (60%), or to eliminate all opponents, wins. Full rules in README.md; agent API in API.md.</p>
+  </div>
+</main>
+<footer>Hex Harvest — built for TaskMarket bounty TSK-JKVSTHB7 · No accounts, no install for humans.</footer>
+
+<script src="/game.js"></script>
+<script>
+// Browser client + in-browser API (window.StrategyGameAPI).
+// Talks to the Node server when hosted, and falls back to a local
+// in-memory game (HexHarvest logic) so the page also works on static hosting.
+const API_BASE = '';
+let match = null;         // server match object, when online
+let localState = null;    // HexHarvest state, when offline/static
+let myPlayer = 0;
+let replayIndex = 0;      // 0 = live; >0 = replaying log up to this move
+
+const $ = (id) => document.getElementById(id);
+
+window.StrategyGameAPI = {
+  createMatch: async (playerCount) => {
+    const r = await fetch(API_BASE + '/api/matches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerCount }) });
+    return r.json();
+  },
+  getMatch: async (id) => (await fetch(API_BASE + '/api/matches/' + id)).json(),
+  joinMatch: async (id, player, name, isBot) => {
+    const r = await fetch(API_BASE + '/api/matches/' + id + '/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player, name, isBot }) });
+    return r.json();
+  },
+  move: async (id, player, action) => {
+    const r = await fetch(API_BASE + '/api/matches/' + id + '/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player, action }) });
+    return r.json();
+  },
+  getLog: async (id) => (await fetch(API_BASE + '/api/matches/' + id + '/log')).json(),
+  // Offline/local: play the shared logic directly in the browser.
+  createLocalGame: (playerCount) => { localState = HexHarvest.createGame(playerCount); return localState; },
+  localMove: (player, action) => HexHarvest.applyMove(localState, player, action),
+  localState: () => localState
+};
+
+function state() { return match ? match : localState ? localStateToMatch(localState) : null; }
+function localStateToMatch(s) {
+  return { board: s.board, resources: s.resources, gamePlayers: s.players, turn: s.turn, moveNumber: s.moveNumber, status: s.status, winner: s.winner, winReason: s.winReason };
+}
+
+async function refresh() {
+  if (match) {
+    const d = await window.StrategyGameAPI.getMatch(match.id);
+    if (d.ok) match = d.match;
+    const log = await window.StrategyGameAPI.getLog(match.id);
+    render(log.log);
+  } else if (localState) {
+    render(localState.log);
+  }
+}
+
+function render(logEntries) {
+  const s = state();
+  if (!s) return;
+  $('matchId').textContent = match ? match.id : 'local game';
+  $('matchCode').textContent = match ? match.code : '—';
+  const turnName = s.gamePlayers[s.turn] ? s.gamePlayers[s.turn].name : '';
+  $('status').textContent = s.status === 'finished'
+    ? (s.winner === null ? 'Draw — ' + s.winReason : s.gamePlayers[s.winner].name + ' wins! ' + s.winReason)
+    : 'Turn: ' + turnName + ' (player ' + s.turn + ') · Move #' + s.moveNumber;
+  $('players').innerHTML = s.gamePlayers.map((pl, i) =>
+    '<div class="player-card' + (s.turn === i && s.status === 'playing' ? ' active' : '') + '" style="border-top: 4px solid ' + pl.color + '">' +
+    '<b>' + pl.name + '</b> (P' + i + ')<br>Cells: ' + pl.cells + ' · Points: ' + pl.points + '</div>').join('');
+  // Legal moves for the current player (highlighted).
+  let legal = [];
+  if (s.status === 'playing') {
+    try { legal = HexHarvest.legalMoves({ status: s.status, turn: s.turn, board: s.board, players: s.gamePlayers, playerCount: s.gamePlayers.length }, s.turn); } catch (e) { legal = []; }
+  }
+  const legalSet = new Set(legal.filter(m => m.row !== undefined).map(m => m.row + ',' + m.col));
+  const boardEl = $('board');
+  boardEl.innerHTML = '';
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const owner = s.board[r][c];
+    const div = document.createElement('div');
+    div.className = 'cell' + (legalSet.has(r + ',' + c) ? ' legal' : '');
+    div.textContent = owner === -1 ? s.resources[r][c] : 'P' + owner;
+    div.style.background = owner === -1 ? '#243444' : s.gamePlayers[owner].color;
+    div.title = 'Cell (' + r + ',' + c + ') · resource ' + s.resources[r][c] + (owner === -1 ? ' · neutral' : ' · owned by ' + s.gamePlayers[owner].name);
+    div.onclick = () => onCellClick(r, c, owner);
+    boardEl.appendChild(div);
+  }
+  const logEl = $('log');
+  const entries = (logEntries || []).slice(-40);
+  logEl.innerHTML = entries.length ? entries.map(e => '<div>#' + e.n + ' · P' + e.player + ' · ' + e.action + (e.row !== undefined ? ' (' + e.row + ',' + e.col + ')' : '') + ' — ' + e.note + '</div>').join('') : '<div>No moves yet.</div>';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function onCellClick(r, c, owner) {
+  const s = state();
+  if (!s || s.status !== 'playing' || s.turn !== myPlayer) return;
+  const type = owner === -1 ? 'claim' : 'capture';
+  if (match) {
+    const d = await window.StrategyGameAPI.move(match.id, myPlayer, { type, row: r, col: c });
+    if (!d.ok) alert('Move rejected: ' + d.error); else match = d.match;
+  } else if (localState) {
+    const res = window.StrategyGameAPI.localMove(myPlayer, { type, row: r, col: c });
+    if (!res.ok) alert('Move rejected: ' + res.error);
+  }
+  await refresh();
+  // After a human move, let the bot (if any) answer automatically in local mode.
+  await botAutoPlay();
+}
+
+async function botAutoPlay() {
+  const s = state();
+  if (!s || s.status !== 'playing') return;
+  // Simple in-browser bot for slots marked isBot in a server match is handled
+  // by bot.js; here we only auto-play bot slots in a local game.
+  if (match || !localState) return;
+  // Local game: all non-human players are bots.
+  while (localState.status === 'playing' && localState.turn !== myPlayer) {
+    const moves = HexHarvest.legalMoves(localState, localState.turn);
+    const caps = moves.filter(m => m.type === 'capture');
+    const claims = moves.filter(m => m.type === 'claim');
+    const pick = (arr) => arr.sort((a, b) => (localState.resources[b.row][b.col] || 0) - (localState.resources[a.row][a.col] || 0))[0];
+    const move = pick(caps) || pick(claims) || { type: 'harvest' };
+    HexHarvest.applyMove(localState, localState.turn, move);
+  }
+  render(localState.log);
+}
+
+$('btnCreate').onclick = async () => {
+  const n = parseInt($('playerCount').value, 10);
+  try {
+    const d = await window.StrategyGameAPI.createMatch(n);
+    if (d.ok) { match = d.match; localState = null; myPlayer = 0; await window.StrategyGameAPI.joinMatch(match.id, 0, 'You', false); }
+  } catch (e) {
+    // Static hosting fallback: local game, other players are bots.
+    match = null; localState = window.StrategyGameAPI.createLocalGame(n); myPlayer = 0;
+  }
+  replayIndex = 0;
+  await refresh();
+};
+$('btnHarvest').onclick = async () => {
+  const s = state();
+  if (!s || s.status !== 'playing' || s.turn !== myPlayer) return;
+  if (match) {
+    const d = await window.StrategyGameAPI.move(match.id, myPlayer, { type: 'harvest' });
+    if (d.ok) match = d.match;
+  } else if (localState) {
+    window.StrategyGameAPI.localMove(myPlayer, { type: 'harvest' });
+  }
+  await refresh(); await botAutoPlay();
+};
+$('btnBot').onclick = async () => {
+  if (!match) { alert('Create a server match first, then run: node bot.js http://localhost:3000 ' + (match ? match.id : '') + ' 1'); return; }
+  const nextBot = match.players.find(p => !p.joined);
+  if (!nextBot) { alert('All slots are taken.'); return; }
+  await window.StrategyGameAPI.joinMatch(match.id, nextBot.slot, 'Bot', true);
+  alert('Bot slot ' + nextBot.slot + ' reserved. Run: node bot.js http://localhost:3000 ' + match.id + ' ' + nextBot.slot);
+  await refresh();
+};
+$('btnReplay').onclick = async () => {
+  // Replay: rebuild the game from the log and step through it.
+  const s = state();
+  if (!s) return;
+  let entries = [];
+  if (match) { const d = await window.StrategyGameAPI.getLog(match.id); entries = d.log || []; }
+  else if (localState) { entries = localState.log; }
+  const moves = entries.filter(e => e.action === 'claim' || e.action === 'capture' || e.action === 'harvest');
+  const n = match ? match.playerCount : localState.playerCount;
+  const replay = HexHarvest.createGame(n);
+  for (const m of moves) HexHarvest.applyMove(replay, m.player, { type: m.action, row: m.row, col: m.col });
+  localState = replay; match = null;
+  render(replay.log);
+  alert('Replay rebuilt from ' + moves.length + ' logged moves. Final state: ' + (replay.status === 'finished' ? replay.winReason : 'move #' + replay.moveNumber));
+};
+</script>
+</body>
+</html>

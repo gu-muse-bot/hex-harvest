@@ -1,0 +1,25 @@
+* { box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #101820; color: #eef2f5; }
+header { padding: 16px 24px; background: #1a2632; }
+header h1 { margin: 0; font-size: 24px; }
+header p { margin: 4px 0 0; color: #9fb3c8; }
+main { max-width: 900px; margin: 0 auto; padding: 16px; }
+.panel { background: #1a2632; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+.panel h2 { margin: 0 0 8px; font-size: 16px; }
+button { background: #2ecc71; border: 0; color: #06281a; font-weight: 700; padding: 8px 14px; border-radius: 8px; cursor: pointer; margin-right: 6px; }
+button.secondary { background: #3498db; color: #fff; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+input, select { padding: 7px; border-radius: 6px; border: 1px solid #3a4a5a; background: #0f1720; color: #eef2f5; margin-right: 6px; }
+#board { display: grid; grid-template-columns: repeat(8, 44px); gap: 3px; margin: 10px 0; }
+.cell { width: 44px; height: 44px; border-radius: 6px; background: #243444; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #cfe0ee; cursor: pointer; border: 2px solid transparent; user-select: none; }
+.cell.legal { border-color: #f1c40f; cursor: pointer; }
+.cell.selected { border-color: #fff; }
+.cell .res { opacity: .7; font-size: 10px; }
+#status { font-weight: 700; margin: 8px 0; }
+#players { display: flex; gap: 10px; flex-wrap: wrap; }
+.player-card { border: 2px solid #3a4a5a; border-radius: 8px; padding: 8px 10px; min-width: 130px; }
+.player-card.active { border-color: #f1c40f; }
+#log { max-height: 180px; overflow-y: auto; background: #0f1720; border-radius: 8px; padding: 8px 10px; font-size: 13px; line-height: 1.5; }
+#log div { border-bottom: 1px solid #1e2c3a; padding: 2px 0; }
+.hint { color: #9fb3c8; font-size: 13px; }
+footer { text-align: center; color: #7d93a8; font-size: 12px; padding: 12px; }
